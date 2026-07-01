@@ -18,6 +18,8 @@ import os
 import warnings
 from typing import Any, Dict, List
 
+import cv2
+import numpy as np
 import torch
 import torch.distributed as dist
 from pytorch_lightning import LightningModule
@@ -26,6 +28,7 @@ from pytorch_lightning.utilities import rank_zero_only
 from nanodet.data.batch_process import stack_batch_img
 from nanodet.optim import build_optimizer
 from nanodet.util import convert_avg_params, gather_results, mkdir
+from nanodet.util.visualization import overlay_bbox_cv
 
 from ..model.arch import build_model
 from ..model.weight_averager import build_weight_averager
@@ -48,6 +51,7 @@ class TrainingTask(LightningModule):
         self.save_flag = -10
         self.log_style = "NanoDet"
         self.weight_averager = None
+        self._vis_data = None
         if "weight_averager" in cfg.model:
             self.weight_averager = build_weight_averager(
                 cfg.model.weight_averager, device=self.device
@@ -138,6 +142,31 @@ class TrainingTask(LightningModule):
             self.logger.info(log_msg)
 
         dets = self.model.head.post_process(preds, batch)
+
+        # Cache first batch for visualization
+        if batch_idx == 0 and self.local_rank < 1:
+            img_ids = batch["img_info"]["id"]
+            if isinstance(img_ids, torch.Tensor):
+                img_ids = img_ids.detach().cpu().numpy().tolist()
+            elif isinstance(img_ids, list) and isinstance(img_ids[0], torch.Tensor):
+                img_ids = [int(i.detach().cpu().numpy()) for i in img_ids]
+            else:
+                img_ids = [int(i) for i in img_ids]
+
+            gt_bboxes = []
+            for b in batch["gt_bboxes"]:
+                if isinstance(b, torch.Tensor):
+                    gt_bboxes.append(b.detach().cpu().numpy())
+                else:
+                    gt_bboxes.append(np.array(b, dtype=np.float32))
+
+            self._vis_data = {
+                "imgs": batch["img"].detach().cpu().clone(),
+                "dets": dets,
+                "img_ids": img_ids,
+                "gt_bboxes": gt_bboxes,
+            }
+
         return dets
 
     def validation_epoch_end(self, validation_step_outputs):
@@ -184,6 +213,7 @@ class TrainingTask(LightningModule):
                     "Warning! Save_key is not in eval results! Only save model last!"
                 )
             self.logger.log_metrics(eval_results, self.current_epoch + 1)
+            self.log_validation_images()
         else:
             self.logger.info("Skip val on rank {}".format(self.local_rank))
 
@@ -291,6 +321,67 @@ class TrainingTask(LightningModule):
         """
         if self.local_rank < 1:
             self.logger.experiment.add_scalars(tag, {phase: value}, step)
+
+    @rank_zero_only
+    def log_validation_images(self):
+        """Log validation images with predicted bboxes to TensorBoard."""
+        if self._vis_data is None:
+            return
+
+        vis_cfg = self.cfg.get("vis", {})
+        num_images = vis_cfg.get("num_images", 5)
+        score_thresh = vis_cfg.get("score_thresh", 0.5)
+
+        imgs = self._vis_data["imgs"]
+        dets_dict = self._vis_data["dets"]
+        img_ids = self._vis_data["img_ids"]
+        gt_bboxes_list = self._vis_data["gt_bboxes"]
+
+        # Denormalization params
+        norm_cfg = self.cfg.data.val.pipeline.get("normalize", [[128.0], [128.0]])
+        mean = np.array(norm_cfg[0], dtype=np.float32).reshape(-1)
+        std = np.array(norm_cfg[1], dtype=np.float32).reshape(-1)
+
+        num_samples = min(num_images, imgs.shape[0])
+        for idx in range(num_samples):
+            img_id = img_ids[idx]
+            img_tensor = imgs[idx]  # [C, H, W]
+
+            # Denormalize
+            img = img_tensor.numpy().transpose(1, 2, 0)  # [H, W, C]
+            img = img * std + mean
+            img = np.clip(img, 0, 255).astype(np.uint8)
+
+            # Convert single-channel grayscale to 3-channel BGR for visualization
+            if img.shape[2] == 1:
+                vis_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            else:
+                vis_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+            # Draw predicted boxes
+            pred_dets = dets_dict.get(img_id, {})
+            vis_img = overlay_bbox_cv(vis_img, pred_dets, self.cfg.class_names, score_thresh)
+
+            # Draw GT boxes in green
+            gt_img = vis_img.copy()
+            gt_boxes = gt_bboxes_list[idx]
+            for box in gt_boxes:
+                x0, y0, x1, y1 = [int(b) for b in box[:4]]
+                cv2.rectangle(gt_img, (x0, y0), (x1, y1), (0, 255, 0), 2)
+
+            # Combine pred and gt side-by-side
+            combined = np.concatenate([vis_img, gt_img], axis=1)
+
+            # Convert BGR to RGB for TensorBoard
+            combined_rgb = combined[:, :, ::-1].transpose(2, 0, 1)
+            self.logger.experiment.add_image(
+                f"val/pred_with_gt_{idx}",
+                combined_rgb,
+                global_step=self.current_epoch + 1,
+            )
+
+        # Clear cache
+        self._vis_data = None
 
     def info(self, string):
         self.logger.info(string)

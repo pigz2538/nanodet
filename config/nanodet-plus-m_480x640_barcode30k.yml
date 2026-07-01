@@ -110,7 +110,7 @@ data:
 device:
   gpu_ids: [0]
   workers_per_gpu: 16
-  batchsize_per_gpu: 48    # 从 64 降到 32，避免 OOM
+  batchsize_per_gpu: 60    # 从 64 降到 32，避免 OOM
   precision: 32            # 保持 FP32，不用混合精度
 
 schedule:
@@ -122,12 +122,12 @@ schedule:
     name: linear
     steps: 500
     ratio: 0.0001
-  total_epochs: 150        # Barcode-30k 不大，150 轮通常足够
+  total_epochs: 1000       # 用户要求 1000+ epoch
   lr_schedule:
     name: CosineAnnealingLR
-    T_max: 150
+    T_max: 1000             # 与 total_epochs 保持一致
     eta_min: 0.00005
-  val_intervals: 5
+  val_intervals: 1         # 每个 epoch 都跑验证（为了每个 epoch 都能记图）
 
 grad_clip: 35
 evaluator:
@@ -136,5 +136,10 @@ evaluator:
 
 log:
   interval: 10
+
+# 验证集可视化配置（TensorBoard IMAGES）
+vis:
+  num_images: 5       # 每个 epoch 记录几张验证集图片
+  score_thresh: 0.5   # 只显示置信度 > 0.5 的预测框
 
 class_names: ['barcode', 'qr_code']
