@@ -27,6 +27,7 @@ class Predictor(object):
     def __init__(self, cfg, model_path, logger, device="cuda:0"):
         self.cfg = cfg
         self.device = device
+        self.grayscale = cfg.data.val.get("grayscale", False)
         model = build_model(cfg.model)
         ckpt = torch.load(model_path, map_location=lambda storage, loc: storage)
         load_model_weight(model, ckpt, logger)
@@ -44,7 +45,11 @@ class Predictor(object):
         img_info = {}
         if isinstance(img, str):
             img_info["file_name"] = os.path.basename(img)
-            img = cv2.imread(img)
+            if self.grayscale:
+                img = cv2.imread(img, cv2.IMREAD_GRAYSCALE)
+                img = img[..., None]
+            else:
+                img = cv2.imread(img)
         else:
             img_info["file_name"] = None
 
@@ -53,11 +58,11 @@ class Predictor(object):
         img_info["width"] = width
         meta = dict(img_info=img_info, raw_img=img, img=img)
         meta = self.pipeline(meta, self.cfg.data.val.input_size)
-        meta["img"] = (
-            torch.from_numpy(meta["img"].transpose(2, 0, 1))
-            .unsqueeze(0)
-            .to(self.device)
-        )
+        if meta["img"].ndim == 2:
+            img_tensor = torch.from_numpy(meta["img"][None, ...])
+        else:
+            img_tensor = torch.from_numpy(meta["img"].transpose(2, 0, 1))
+        meta["img"] = img_tensor.unsqueeze(0).to(self.device)
         with torch.no_grad():
             results = self.model.inference(meta)
         return meta, results

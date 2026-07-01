@@ -1,0 +1,145 @@
+class_names:
+- barcode
+- qr_code
+data:
+  train:
+    ann_path: dataset/barcode30k_final/train/train.json
+    grayscale: true
+    img_path: dataset/barcode30k_final/train/images
+    input_size:
+    - 640
+    - 480
+    keep_ratio: true
+    name: CocoDataset
+    pipeline:
+      brightness: 0.1
+      contrast:
+      - 0.8
+      - 1.2
+      flip: 0.5
+      normalize:
+      - - 114.4859
+      - - 66.9615
+      perspective: 0.0
+      rotation: 5
+      scale:
+      - 0.6
+      - 1.4
+      shear: 2
+      stretch:
+      - - 0.8
+        - 1.2
+      - - 0.8
+        - 1.2
+      translate: 0.1
+  val:
+    ann_path: dataset/barcode30k_final/val/val.json
+    grayscale: true
+    img_path: dataset/barcode30k_final/val/images
+    input_size:
+    - 480
+    - 640
+    keep_ratio: true
+    name: CocoDataset
+    pipeline:
+      normalize:
+      - - 114.4859
+      - - 66.9615
+device:
+  batchsize_per_gpu: 48
+  gpu_ids:
+  - 0
+  precision: 32
+  workers_per_gpu: 16
+evaluator:
+  name: CocoDetectionEvaluator
+  save_key: mAP
+grad_clip: 35
+log:
+  interval: 10
+model:
+  arch:
+    aux_head:
+      activation: LeakyReLU
+      feat_channels: 192
+      input_channel: 192
+      name: SimpleConvHead
+      num_classes: 2
+      reg_max: 7
+      stacked_convs: 4
+      strides:
+      - 8
+      - 16
+      - 32
+      - 64
+    backbone:
+      activation: LeakyReLU
+      in_channels: 1
+      model_size: 1.0x
+      name: ShuffleNetV2
+      out_stages:
+      - 2
+      - 3
+      - 4
+      pretrain: false
+    detach_epoch: 10
+    fpn:
+      activation: LeakyReLU
+      in_channels:
+      - 116
+      - 232
+      - 464
+      kernel_size: 5
+      name: GhostPAN
+      num_extra_level: 1
+      out_channels: 96
+      use_depthwise: true
+    head:
+      activation: LeakyReLU
+      feat_channels: 96
+      input_channel: 96
+      kernel_size: 5
+      loss:
+        loss_bbox:
+          loss_weight: 2.0
+          name: GIoULoss
+        loss_dfl:
+          loss_weight: 0.25
+          name: DistributionFocalLoss
+        loss_qfl:
+          beta: 2.0
+          loss_weight: 1.0
+          name: QualityFocalLoss
+          use_sigmoid: true
+      name: NanoDetPlusHead
+      norm_cfg:
+        type: BN
+      num_classes: 2
+      reg_max: 7
+      stacked_convs: 2
+      strides:
+      - 8
+      - 16
+      - 32
+      - 64
+    name: NanoDetPlus
+  weight_averager:
+    decay: 0.9998
+    name: ExpMovingAverager
+save_dir: workspace/nanodet-plus-m_barcode30k
+schedule:
+  lr_schedule:
+    T_max: 150
+    eta_min: 5.0e-05
+    name: CosineAnnealingLR
+  optimizer:
+    lr: 0.001
+    name: AdamW
+    weight_decay: 0.05
+  total_epochs: 150
+  val_intervals: 5
+  warmup:
+    name: linear
+    ratio: 0.0001
+    steps: 500
+test: {}

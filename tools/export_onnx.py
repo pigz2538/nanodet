@@ -43,8 +43,9 @@ def main(config, model_path, output_path, input_shape=(320, 320)):
         from nanodet.model.backbone.repvgg import repvgg_det_model_convert
 
         model = repvgg_det_model_convert(model, deploy_model)
+    in_channels = config.model.arch.backbone.get("in_channels", 3)
     dummy_input = torch.autograd.Variable(
-        torch.randn(1, 3, input_shape[0], input_shape[1])
+        torch.randn(1, in_channels, input_shape[0], input_shape[1])
     )
 
     torch.onnx.export(

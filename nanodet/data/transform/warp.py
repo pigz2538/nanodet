@@ -241,6 +241,34 @@ def warp_boxes(boxes, M, width, height):
 #         return xy
 
 
+def pad_to_shape(img: np.ndarray, target_shape: Tuple[int, int], pad_value: int = 0):
+    """Pad image to target_shape (width, height) with center alignment.
+    Returns padded image and (x_offset, y_offset).
+    """
+    target_w, target_h = target_shape
+    if img.ndim == 3:
+        h, w, c = img.shape
+        padded = np.full((target_h, target_w, c), pad_value, dtype=img.dtype)
+    else:
+        h, w = img.shape
+        padded = np.full((target_h, target_w), pad_value, dtype=img.dtype)
+    off_x = (target_w - w) // 2
+    off_y = (target_h - h) // 2
+    padded[off_y : off_y + h, off_x : off_x + w] = img
+    return padded, (off_x, off_y)
+
+
+def pad_mask_to_shape(mask: np.ndarray, target_shape: Tuple[int, int]):
+    """Pad binary mask to target_shape with center alignment."""
+    target_w, target_h = target_shape
+    h, w = mask.shape[:2]
+    padded = np.zeros((target_h, target_w), dtype=mask.dtype)
+    off_x = (target_w - w) // 2
+    off_y = (target_h - h) // 2
+    padded[off_y : off_y + h, off_x : off_x + w] = mask
+    return padded
+
+
 def get_minimum_dst_shape(
     src_shape: Tuple[int, int],
     dst_shape: Tuple[int, int],
@@ -335,6 +363,7 @@ class ShapeTransform:
         T = get_translate_matrix(self.translate_ratio, width, height)
         M = T @ C
 
+        target_shape = dst_shape
         if self.keep_ratio:
             dst_shape = get_minimum_dst_shape(
                 (width, height), dst_shape, self.divisible
@@ -343,6 +372,7 @@ class ShapeTransform:
         ResizeM = get_resize_matrix((width, height), dst_shape, self.keep_ratio)
         M = ResizeM @ M
         img = cv2.warpPerspective(raw_img, M, dsize=tuple(dst_shape))
+
         meta_data["img"] = img
         meta_data["warp_matrix"] = M
         if "gt_bboxes" in meta_data:
@@ -358,5 +388,18 @@ class ShapeTransform:
                 meta_data["gt_masks"][i] = cv2.warpPerspective(
                     mask, M, dsize=tuple(dst_shape)
                 )
+
+        if self.keep_ratio:
+            img, pad_offset = pad_to_shape(img, target_shape)
+            meta_data["img"] = img
+            if "gt_bboxes" in meta_data and len(meta_data["gt_bboxes"]) > 0:
+                meta_data["gt_bboxes"][:, [0, 2]] += pad_offset[0]
+                meta_data["gt_bboxes"][:, [1, 3]] += pad_offset[1]
+            if "gt_bboxes_ignore" in meta_data and len(meta_data["gt_bboxes_ignore"]) > 0:
+                meta_data["gt_bboxes_ignore"][:, [0, 2]] += pad_offset[0]
+                meta_data["gt_bboxes_ignore"][:, [1, 3]] += pad_offset[1]
+            if "gt_masks" in meta_data:
+                for i, mask in enumerate(meta_data["gt_masks"]):
+                    meta_data["gt_masks"][i] = pad_mask_to_shape(mask, target_shape)
 
         return meta_data

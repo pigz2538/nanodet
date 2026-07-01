@@ -29,6 +29,8 @@ def random_contrast(img, alpha_low, alpha_up):
 
 
 def random_saturation(img, alpha_low, alpha_up):
+    if img.ndim != 3 or img.shape[2] != 3:
+        return img
     hsv_img = cv2.cvtColor(img.astype(np.float32), cv2.COLOR_BGR2HSV)
     hsv_img[..., 1] *= random.uniform(alpha_low, alpha_up)
     img = cv2.cvtColor(hsv_img, cv2.COLOR_HSV2BGR)
@@ -46,8 +48,13 @@ def normalize(meta, mean, std):
 
 
 def _normalize(img, mean, std):
-    mean = np.array(mean, dtype=np.float32).reshape(1, 1, 3) / 255
-    std = np.array(std, dtype=np.float32).reshape(1, 1, 3) / 255
+    if img.ndim == 2:
+        mean = np.array(mean, dtype=np.float32).reshape(1, 1) / 255
+        std = np.array(std, dtype=np.float32).reshape(1, 1) / 255
+    else:
+        num_channels = img.shape[-1]
+        mean = np.array(mean, dtype=np.float32).reshape(1, 1, num_channels) / 255
+        std = np.array(std, dtype=np.float32).reshape(1, 1, num_channels) / 255
     img = (img - mean) / std
     return img
 

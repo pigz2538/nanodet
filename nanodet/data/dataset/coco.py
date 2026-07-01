@@ -123,10 +123,17 @@ class CocoDataset(BaseDataset):
         img_info = self.get_per_img_info(idx)
         file_name = img_info["file_name"]
         image_path = os.path.join(self.img_path, file_name)
-        img = cv2.imread(image_path)
-        if img is None:
-            print("image {} read failed.".format(image_path))
-            raise FileNotFoundError("Cant load image! Please check image path!")
+        if self.grayscale:
+            img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                print("image {} read failed.".format(image_path))
+                raise FileNotFoundError("Cant load image! Please check image path!")
+            img = img[..., None]
+        else:
+            img = cv2.imread(image_path)
+            if img is None:
+                print("image {} read failed.".format(image_path))
+                raise FileNotFoundError("Cant load image! Please check image path!")
         ann = self.get_img_annotation(idx)
         meta = dict(
             img=img,
@@ -146,7 +153,11 @@ class CocoDataset(BaseDataset):
 
         meta = self.pipeline(self, meta, input_size)
 
-        meta["img"] = torch.from_numpy(meta["img"].transpose(2, 0, 1))
+        if meta["img"].ndim == 2:
+            meta["img"] = meta["img"][None, ...]
+        else:
+            meta["img"] = meta["img"].transpose(2, 0, 1)
+        meta["img"] = torch.from_numpy(meta["img"])
         return meta
 
     def get_val_data(self, idx):
