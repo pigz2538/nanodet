@@ -44,6 +44,7 @@ def main(config, model_path, output_path, input_shape=(320, 320)):
 
         model = repvgg_det_model_convert(model, deploy_model)
     in_channels = config.model.arch.backbone.get("in_channels", 3)
+    # input_shape is [H, W] for dummy input
     dummy_input = torch.autograd.Variable(
         torch.randn(1, in_channels, input_shape[0], input_shape[1])
     )
@@ -83,7 +84,7 @@ def parse_args():
         "--out_path", type=str, default="nanodet.onnx", help="Onnx model output path."
     )
     parser.add_argument(
-        "--input_shape", type=str, default=None, help="Model intput shape."
+        "--input_shape", type=str, default=None, help="Model input shape as H,W."
     )
     return parser.parse_args()
 
@@ -96,8 +97,11 @@ if __name__ == "__main__":
     input_shape = args.input_shape
     load_config(cfg, cfg_path)
     if input_shape is None:
-        input_shape = cfg.data.train.input_size
+        # Config uses [w, h]; convert to [h, w] for dummy input
+        input_size = cfg.data.train.input_size
+        input_shape = (input_size[1], input_size[0])
     else:
+        # User provided shape is expected as H,W
         input_shape = tuple(map(int, input_shape.split(",")))
         assert len(input_shape) == 2
     if model_path is None:

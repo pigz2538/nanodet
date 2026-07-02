@@ -1,0 +1,376 @@
+# NanoDet-Plus Barcode/QR Code 训练与部署手册
+
+> 本手册基于 NanoDet-Plus 仓库，针对 **480×640 单通道灰度图** 的条码/二维码检测任务。
+> 
+> 多服务器环境配置与多卡训练详见 `SERVER_SETUP.md`。
+
+---
+
+## 1. 环境配置
+
+### 1.1 创建 Conda 环境
+
+```bash
+conda create -n nanodet python=3.9 -y
+conda activate nanodet
+```
+
+### 1.2 安装 PyTorch（带 CUDA）
+
+本机 RTX 3090，使用 CUDA 11.7：
+
+```bash
+pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
+```
+
+### 1.3 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+注意：`requirements.txt` 会安装 NumPy 2.x，但 PyTorch 1.13 不兼容，需要降级：
+
+```bash
+pip install "numpy<2"
+```
+
+### 1.4 安装 nanodet 包
+
+```bash
+pip install -e .
+```
+
+### 1.5 验证环境
+
+```bash
+python -c "import nanodet; print(nanodet.__version__); import torch; print(torch.__version__); print('CUDA:', torch.cuda.is_available())"
+```
+
+---
+
+## 2. 数据准备
+
+数据集放在 `./dataset/`，包含三个来源：
+
+- `Barcode and QR code detection.v3i.coco/`：COCO 格式，416×416
+- `qr code.v3i.coco/`：COCO 格式，640×640，只有 QR code
+- `archive/`：VOC/XML 格式，约 1600×1200，只有 barcode
+
+### 2.1 运行数据合并脚本
+
+```bash
+python tools/prepare_barcode30k.py
+```
+
+该脚本会：
+1. 解析三个数据集
+2. 转换为灰度图
+3. 统一类别：`barcode=1`，`qr_code=2`
+4. 过滤小于 4×4 像素的 bbox
+5. 全局随机打乱，按 **8:1:1** 切分为 train/val/test
+6. 计算训练集 mean/std
+7. 输出到 `./dataset/barcode30k_final/`
+
+### 2.2 输出结构
+
+```text
+dataset/barcode30k_final/
+├── train/
+│   ├── images/
+│   └── train.json
+├── val/
+│   ├── images/
+│   └── val.json
+├── test/
+│   ├── images/
+│   └── test.json
+└── norm_stats.json
+```
+
+### 2.3 清理临时文件
+
+```bash
+rm -rf dataset/unified_pool
+```
+
+---
+
+## 3. 配置文件
+
+主配置文件：`config/nanodet-plus-m_480x640_barcode30k.yml`
+
+关键参数：
+
+```yaml
+model:
+  arch:
+    backbone:
+      name: ShuffleNetV2
+      model_size: 1.0x
+      in_channels: 1          # 单通道灰度输入
+      pretrain: False         # 不使用 ImageNet 预训练
+    head:
+      num_classes: 2          # barcode + qr_code
+
+data:
+  train:
+    input_size: [640, 480]    # [w, h]，对应张量 1x1x480x640
+    keep_ratio: True          # 等比缩放 + 中心 padding
+    grayscale: True
+    pipeline:
+      normalize: [[114.4859], [66.9615]]   # 训练集统计的 mean/std
+  val:
+    input_size: [640, 480]
+    keep_ratio: True
+    grayscale: True
+
+vis:
+  num_images: 5               # 每个 epoch 记录 5 张验证图到 TensorBoard
+  score_thresh: 0.5
+
+schedule:
+  total_epochs: 1000
+  val_intervals: 1            # 每个 epoch 验证一次
+```
+
+如显存不足，调整：
+
+```yaml
+device:
+  batchsize_per_gpu: 48       # 或 32
+  precision: 32               # 保持 FP32
+```
+
+---
+
+## 4. 训练
+
+### 4.1 启动训练
+
+```bash
+conda activate nanodet
+python tools/train.py config/nanodet-plus-m_480x640_barcode30k.yml
+```
+
+### 4.2 训练输出
+
+```text
+workspace/nanodet-plus-m_barcode30k/
+├── logs-YYYY-MM-DD-HH-MM-SS/   # TensorBoard 日志
+├── model_last.ckpt             # 最后一个 epoch 的模型
+└── model_best/
+    ├── model_best.ckpt         # 验证 AP 最高的模型
+    └── nanodet_model_best.pth  # 仅权重
+```
+
+### 4.3 查看 TensorBoard
+
+```bash
+conda activate nanodet
+tensorboard --logdir workspace/nanodet-plus-m_barcode30k
+```
+
+浏览器打开 `http://localhost:6006`。
+
+### 4.4 训练指标说明
+
+| 指标 | 含义 | 目标 |
+|------|------|------|
+| `Train_loss/total` | 总训练 loss | 稳定下降 |
+| `Train_loss/loss_qfl` | 分类 loss | < 0.3 |
+| `Train_loss/loss_bbox` | 边框回归 loss | < 0.5 |
+| `Train_loss/loss_dfl` | 分布 focal loss | < 0.3 |
+| `Val_metrics/mAP` | COCO mAP | > 0.75 |
+| `Val_metrics/AP_50` | IoU=0.5 的 AP | > 0.90 |
+
+### 4.5 多卡训练
+
+修改配置文件：
+
+```yaml
+device:
+  gpu_ids: [0, 1, 2, 3]      # 使用的 GPU
+  workers_per_gpu: 8
+  batchsize_per_gpu: 48      # 每张卡的 batch size
+  precision: 32
+```
+
+启动训练：
+
+```bash
+./tools/train_multi_gpu.sh
+```
+
+或手动：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 python tools/train.py config/nanodet-plus-m_480x640_barcode30k.yml
+```
+
+总 batch size = `batchsize_per_gpu × GPU 数量`。
+
+详细说明参见 `SERVER_SETUP.md`。
+
+---
+
+## 5. 验证与测试
+
+### 5.1 验证集评估
+
+```bash
+python tools/test.py --task val \
+  --config config/nanodet-plus-m_480x640_barcode30k.yml \
+  --model workspace/nanodet-plus-m_barcode30k/model_last.ckpt
+```
+
+### 5.2 测试集评估
+
+```bash
+python tools/test.py --task test \
+  --config config/nanodet-plus-m_480x640_barcode30k.yml \
+  --model workspace/nanodet-plus-m_barcode30k/model_last.ckpt
+```
+
+### 5.3 预期结果
+
+训练收敛后大致水平：
+
+```text
+mAP:    0.815
+AP50:   0.978
+AP75:   0.934
+barcode AP50: 98.2
+qr_code AP50: 97.4
+```
+
+---
+
+## 6. 单图推理测试
+
+### 6.1 随机抽取 10 张 test 图预测
+
+```bash
+python tools/predict_test_samples.py
+```
+
+输出到：
+
+```text
+workspace/nanodet-plus-m_barcode30k/test_predictions/
+```
+
+### 6.2 自定义单图推理
+
+```python
+from nanodet.util import Logger, cfg, load_config
+from tools.predict_test_samples import Predictor
+
+load_config(cfg, "config/nanodet-plus-m_480x640_barcode30k.yml")
+logger = Logger(-1, "./tmp", False)
+predictor = Predictor(cfg, "workspace/nanodet-plus-m_barcode30k/model_last.ckpt", logger, device="cuda:0")
+
+meta, results = predictor.inference("path/to/your/image.jpg")
+dets = results[0]  # {class_id: [[x1, y1, x2, y2, score], ...]}
+```
+
+---
+
+## 7. ONNX 导出
+
+### 7.1 导出命令
+
+```bash
+python tools/export_onnx.py \
+  --cfg_path config/nanodet-plus-m_480x640_barcode30k.yml \
+  --model_path workspace/nanodet-plus-m_barcode30k/model_last.ckpt \
+  --out_path workspace/nanodet-plus-m_barcode30k/nanodet_barcode_480x640.onnx \
+  --input_shape 480,640
+```
+
+### 7.2 导出选项
+
+| 参数 | 说明 |
+|------|------|
+| `--cfg_path` | 配置文件 |
+| `--model_path` | checkpoint 路径 |
+| `--out_path` | 输出 ONNX 路径 |
+| `--input_shape` | 输入形状 `H,W`，不指定则自动从 config 读取 |
+
+### 7.3 ONNX 模型信息
+
+```text
+Input:  data [1, 1, 480, 640]
+Output: output [1, 6380, 34]
+Size:   ~5.3 MB
+```
+
+### 7.4 输出格式
+
+- `6380`：4 个 stride（8/16/32/64）的 anchor points 总数
+- `34`：前 2 维是分类分数，后 32 维是 bbox 分布回归
+
+### 7.5 NPU 部署后处理
+
+部署时必须实现：
+
+1. **输入预处理**：灰度化 → 等比缩放+中心 padding → 归一化 `mean=[114.4859], std=[66.9615]`
+2. **ONNX 推理**：输入 `1×1×480×640`
+3. **输出 Split**：`cls (2)` + `dis (32)`
+4. **Sigmoid**：cls 转置信度
+5. **Distribution decode**：32 维分布 → 4 个边框偏移
+6. **BBox decode**：特征点坐标 + 偏移 → `x1,y1,x2,y2`
+7. **NMS**：按类别分别非极大值抑制
+
+---
+
+## 8. 常见问题
+
+### 8.1 CUDA out of memory
+
+降低 batch size：
+
+```yaml
+device:
+  batchsize_per_gpu: 32
+```
+
+### 8.2 训练 loss 下降但 val AP 很低
+
+通常是 `keep_ratio=True` 时 padding 坐标对齐问题。检查 `nanodet/data/transform/warp.py` 中 padding 是否已合并进 `warp_matrix`。
+
+### 8.3 NumPy 版本不兼容
+
+如出现 `A module that was compiled using NumPy 1.x cannot be run in NumPy 2.0`：
+
+```bash
+pip install "numpy<2"
+```
+
+### 8.4 TensorBoard 看不到图像
+
+确认配置中有：
+
+```yaml
+vis:
+  num_images: 5
+  score_thresh: 0.5
+```
+
+且 `val_intervals` 不为 0。
+
+---
+
+## 9. 关键文件清单
+
+| 文件 | 作用 |
+|------|------|
+| `config/nanodet-plus-m_480x640_barcode30k.yml` | 训练/导出配置 |
+| `tools/prepare_barcode30k.py` | 数据合并、灰度化、切分 |
+| `tools/train.py` | 训练入口 |
+| `tools/test.py` | 验证/测试入口 |
+| `tools/export_onnx.py` | ONNX 导出 |
+| `tools/predict_test_samples.py` | 单图/批量推理可视化 |
+| `nanodet/data/transform/warp.py` | 数据增强 + padding 坐标对齐 |
+| `nanodet/trainer/task.py` | 训练任务 + TensorBoard 图像可视化 |
+| `nanodet/model/backbone/shufflenetv2.py` | 支持 `in_channels=1` 的 backbone |
