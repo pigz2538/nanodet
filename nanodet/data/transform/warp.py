@@ -373,6 +373,19 @@ class ShapeTransform:
         M = ResizeM @ M
         img = cv2.warpPerspective(raw_img, M, dsize=tuple(dst_shape))
 
+        if self.keep_ratio:
+            img, pad_offset = pad_to_shape(img, target_shape)
+            # Compose padding translation into warp matrix so that
+            # post-processing can map predictions back to original image coords.
+            P = np.eye(3)
+            P[0, 2] = pad_offset[0]
+            P[1, 2] = pad_offset[1]
+            M = P @ M
+            dst_shape = target_shape
+            if "gt_masks" in meta_data:
+                for i, mask in enumerate(meta_data["gt_masks"]):
+                    meta_data["gt_masks"][i] = pad_mask_to_shape(mask, target_shape)
+
         meta_data["img"] = img
         meta_data["warp_matrix"] = M
         if "gt_bboxes" in meta_data:
@@ -383,23 +396,5 @@ class ShapeTransform:
             meta_data["gt_bboxes_ignore"] = warp_boxes(
                 bboxes_ignore, M, dst_shape[0], dst_shape[1]
             )
-        if "gt_masks" in meta_data:
-            for i, mask in enumerate(meta_data["gt_masks"]):
-                meta_data["gt_masks"][i] = cv2.warpPerspective(
-                    mask, M, dsize=tuple(dst_shape)
-                )
-
-        if self.keep_ratio:
-            img, pad_offset = pad_to_shape(img, target_shape)
-            meta_data["img"] = img
-            if "gt_bboxes" in meta_data and len(meta_data["gt_bboxes"]) > 0:
-                meta_data["gt_bboxes"][:, [0, 2]] += pad_offset[0]
-                meta_data["gt_bboxes"][:, [1, 3]] += pad_offset[1]
-            if "gt_bboxes_ignore" in meta_data and len(meta_data["gt_bboxes_ignore"]) > 0:
-                meta_data["gt_bboxes_ignore"][:, [0, 2]] += pad_offset[0]
-                meta_data["gt_bboxes_ignore"][:, [1, 3]] += pad_offset[1]
-            if "gt_masks" in meta_data:
-                for i, mask in enumerate(meta_data["gt_masks"]):
-                    meta_data["gt_masks"][i] = pad_mask_to_shape(mask, target_shape)
 
         return meta_data
