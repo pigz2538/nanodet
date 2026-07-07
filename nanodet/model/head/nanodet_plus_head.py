@@ -95,7 +95,18 @@ class NanoDetPlusHead(nn.Module):
             [
                 nn.Conv2d(
                     self.feat_channels,
-                    self.num_classes + 4 * (self.reg_max + 1),
+                    self.num_classes,
+                    1,
+                    padding=0,
+                )
+                for _ in self.strides
+            ]
+        )
+        self.gfl_reg = nn.ModuleList(
+            [
+                nn.Conv2d(
+                    self.feat_channels,
+                    4 * (self.reg_max + 1),
                     1,
                     padding=0,
                 )
@@ -129,20 +140,24 @@ class NanoDetPlusHead(nn.Module):
         bias_cls = -4.595
         for i in range(len(self.strides)):
             normal_init(self.gfl_cls[i], std=0.01, bias=bias_cls)
+            normal_init(self.gfl_reg[i], std=0.01)
         print("Finish initialize NanoDet-Plus Head.")
 
     def forward(self, feats):
         if torch.onnx.is_in_onnx_export():
             return self._forward_onnx(feats)
         outputs = []
-        for feat, cls_convs, gfl_cls in zip(
+        for feat, cls_convs, gfl_cls, gfl_reg in zip(
             feats,
             self.cls_convs,
             self.gfl_cls,
+            self.gfl_reg,
         ):
             for conv in cls_convs:
                 feat = conv(feat)
-            output = gfl_cls(feat)
+            cls_pred = gfl_cls(feat)
+            reg_pred = gfl_reg(feat)
+            output = torch.cat([cls_pred, reg_pred], dim=1)
             outputs.append(output.flatten(start_dim=2))
         outputs = torch.cat(outputs, dim=2).permute(0, 2, 1)
         return outputs
@@ -538,18 +553,16 @@ class NanoDetPlusHead(nn.Module):
     def _forward_onnx(self, feats):
         """only used for onnx export"""
         outputs = []
-        for feat, cls_convs, gfl_cls in zip(
+        for feat, cls_convs, gfl_cls, gfl_reg in zip(
             feats,
             self.cls_convs,
             self.gfl_cls,
+            self.gfl_reg,
         ):
             for conv in cls_convs:
                 feat = conv(feat)
-            output = gfl_cls(feat)
-            cls_pred, reg_pred = output.split(
-                [self.num_classes, 4 * (self.reg_max + 1)], dim=1
-            )
-            cls_pred = cls_pred.sigmoid()
-            out = torch.cat([cls_pred, reg_pred], dim=1)
-            outputs.append(out.flatten(start_dim=2))
-        return torch.cat(outputs, dim=2).permute(0, 2, 1)
+            cls_pred = gfl_cls(feat).sigmoid()
+            reg_pred = gfl_reg(feat)
+            output = torch.cat([cls_pred, reg_pred], dim=1)
+            outputs.append(output)
+        return outputs

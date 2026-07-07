@@ -80,6 +80,8 @@ class MobileNetV2(nn.Module):
         last_channel=1280,
         activation="ReLU",
         act=None,
+        in_channels=3,
+        pretrain=False,
     ):
         super(MobileNetV2, self).__init__()
         # TODO: support load torchvison pretrained weight
@@ -94,6 +96,8 @@ class MobileNetV2(nn.Module):
                 "Warning! act argument has been deprecated, " "use activation instead!"
             )
             self.activation = act
+        self.in_channels = in_channels
+        self.pretrain = pretrain
         self.interverted_residual_setting = [
             # t, c, n, s
             [1, 16, 1, 1],
@@ -108,7 +112,7 @@ class MobileNetV2(nn.Module):
         # building first layer
         self.input_channel = int(input_channel * width_mult)
         self.first_layer = ConvBNReLU(
-            3, self.input_channel, stride=2, activation=self.activation
+            self.in_channels, self.input_channel, stride=2, activation=self.activation
         )
         # building inverted residual blocks
         for i in range(7):

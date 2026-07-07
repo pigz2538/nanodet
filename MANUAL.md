@@ -106,10 +106,19 @@ rm -rf dataset/unified_pool
 model:
   arch:
     backbone:
-      name: ShuffleNetV2
-      model_size: 1.0x
+      name: MobileNetV2      # 为 NPU 兼容由 ShuffleNetV2 切换
+      width_mult: 1.0
+      out_stages: [2, 4, 6]
+      last_channel: 320        # stage6 输出保持 320，避免默认 1280 过宽
       in_channels: 1          # 单通道灰度输入
       pretrain: False         # 不使用 ImageNet 预训练
+    fpn:
+      name: GhostPAN
+      in_channels: [32, 96, 320]
+      out_channels: 96
+      upsample_cfg:
+        scale_factor: 2
+        mode: nearest         # NPU 只支持 nearest，禁用 bilinear
     head:
       num_classes: 2          # barcode + qr_code
 
@@ -301,14 +310,22 @@ python tools/export_onnx.py \
 
 ```text
 Input:  data [1, 1, 480, 640]
-Output: output [1, 6380, 34]
-Size:   ~5.3 MB
+Outputs:
+  cls_dis_stride_8  : [1, 34, 60, 80]
+  cls_dis_stride_16 : [1, 34, 30, 40]
+  cls_dis_stride_32 : [1, 34, 15, 20]
+  cls_dis_stride_64 : [1, 34,  8, 10]
+Size:   ~9.3 MB
 ```
 
 ### 7.4 输出格式
 
-- `6380`：4 个 stride（8/16/32/64）的 anchor points 总数
-- `34`：前 2 维是分类分数，后 32 维是 bbox 分布回归
+每个输出张量的通道维度 `34 = 2 (num_classes) + 32 (4*(reg_max+1))`：
+
+- 前 2 维：分类分数（已做 Sigmoid）
+- 后 32 维：bbox 分布回归
+
+4 个输出分别对应 stride 8/16/32/64 的特征图，无需再按 anchor point 数拼接。
 
 ### 7.5 NPU 部署后处理
 
@@ -316,11 +333,12 @@ Size:   ~5.3 MB
 
 1. **输入预处理**：灰度化 → 等比缩放+中心 padding → 归一化 `mean=[114.4859], std=[66.9615]`
 2. **ONNX 推理**：输入 `1×1×480×640`
-3. **输出 Split**：`cls (2)` + `dis (32)`
-4. **Sigmoid**：cls 转置信度
-5. **Distribution decode**：32 维分布 → 4 个边框偏移
-6. **BBox decode**：特征点坐标 + 偏移 → `x1,y1,x2,y2`
-7. **NMS**：按类别分别非极大值抑制
+3. **遍历 4 个 stride 输出**：对每个 `[1, 34, H, W]` 张量：
+   - Split：`cls (2)` + `dis (32)`
+   - `cls` 已 Sigmoid，直接作为置信度
+   - Distribution decode：32 维分布 → 4 个边框偏移
+   - BBox decode：特征点坐标 + 偏移 → `x1,y1,x2,y2`
+4. **NMS**：按类别分别非极大值抑制
 
 ---
 
@@ -373,4 +391,5 @@ vis:
 | `tools/predict_test_samples.py` | 单图/批量推理可视化 |
 | `nanodet/data/transform/warp.py` | 数据增强 + padding 坐标对齐 |
 | `nanodet/trainer/task.py` | 训练任务 + TensorBoard 图像可视化 |
-| `nanodet/model/backbone/shufflenetv2.py` | 支持 `in_channels=1` 的 backbone |
+| `nanodet/model/backbone/mobilenetv2.py` | 支持 `in_channels=1` 的 MobileNetV2 backbone |
+| `nanodet/model/head/nanodet_plus_head.py` | 拆分 cls/reg 输出卷积，ONNX 输出每 stride 一个 4D 张量 |

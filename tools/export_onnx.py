@@ -23,12 +23,11 @@ from nanodet.model.arch import build_model
 from nanodet.util import Logger, cfg, load_config, load_model_weight
 
 
-def generate_ouput_names(head_cfg):
-    cls_names, dis_names = [], []
+def generate_output_names(head_cfg):
+    names = []
     for stride in head_cfg.strides:
-        cls_names.append("cls_pred_stride_{}".format(stride))
-        dis_names.append("dis_pred_stride_{}".format(stride))
-    return cls_names + dis_names
+        names.append("cls_dis_stride_{}".format(stride))
+    return names
 
 
 def main(config, model_path, output_path, input_shape=(320, 320)):
@@ -49,6 +48,7 @@ def main(config, model_path, output_path, input_shape=(320, 320)):
         torch.randn(1, in_channels, input_shape[0], input_shape[1])
     )
 
+    output_names = generate_output_names(config.model.arch.head)
     torch.onnx.export(
         model,
         dummy_input,
@@ -57,7 +57,7 @@ def main(config, model_path, output_path, input_shape=(320, 320)):
         keep_initializers_as_inputs=True,
         opset_version=11,
         input_names=["data"],
-        output_names=["output"],
+        output_names=output_names,
     )
     logger.log("finished exporting onnx ")
 
