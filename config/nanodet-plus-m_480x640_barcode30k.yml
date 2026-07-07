@@ -126,10 +126,10 @@ schedule:
     name: linear
     steps: 500
     ratio: 0.0001
-  total_epochs: 10         # 临时改为 10 epoch 做快速验证，正式训练改回 1000
+  total_epochs: 1000       # 用户要求 1000+ epoch
   lr_schedule:
     name: CosineAnnealingLR
-    T_max: 10               # 与 total_epochs 保持一致
+    T_max: 1000             # 与 total_epochs 保持一致
     eta_min: 0.00005
   val_intervals: 1         # 每个 epoch 都跑验证（为了每个 epoch 都能记图）
 

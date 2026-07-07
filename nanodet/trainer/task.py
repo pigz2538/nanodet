@@ -26,6 +26,7 @@ from pytorch_lightning import LightningModule
 from pytorch_lightning.utilities import rank_zero_only
 
 from nanodet.data.batch_process import stack_batch_img
+from nanodet.data.transform.warp import warp_boxes
 from nanodet.optim import build_optimizer
 from nanodet.util import convert_avg_params, gather_results, mkdir
 from nanodet.util.visualization import overlay_bbox_cv
@@ -160,11 +161,14 @@ class TrainingTask(LightningModule):
                 else:
                     gt_bboxes.append(np.array(b, dtype=np.float32))
 
+            warp_matrixes = batch["warp_matrix"]
+
             self._vis_data = {
                 "imgs": batch["img"].detach().cpu().clone(),
                 "dets": dets,
                 "img_ids": img_ids,
                 "gt_bboxes": gt_bboxes,
+                "warp_matrixes": warp_matrixes,
             }
 
         return dets
@@ -336,6 +340,7 @@ class TrainingTask(LightningModule):
         dets_dict = self._vis_data["dets"]
         img_ids = self._vis_data["img_ids"]
         gt_bboxes_list = self._vis_data["gt_bboxes"]
+        warp_matrixes = self._vis_data["warp_matrixes"]
 
         # Denormalization params
         norm_cfg = self.cfg.data.val.pipeline.get("normalize", [[128.0], [128.0]])
@@ -346,6 +351,7 @@ class TrainingTask(LightningModule):
         for idx in range(num_samples):
             img_id = img_ids[idx]
             img_tensor = imgs[idx]  # [C, H, W]
+            _, img_h, img_w = img_tensor.shape
 
             # Denormalize
             img = img_tensor.numpy().transpose(1, 2, 0)  # [H, W, C]
@@ -358,9 +364,22 @@ class TrainingTask(LightningModule):
             else:
                 vis_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-            # Draw predicted boxes
+            # Draw predicted boxes (post_process maps them to original coords,
+            # so map back to resized/padded image coords for visualization)
             pred_dets = dets_dict.get(img_id, {})
-            vis_img = overlay_bbox_cv(vis_img, pred_dets, self.cfg.class_names, score_thresh)
+            M = warp_matrixes[idx]
+            if isinstance(M, torch.Tensor):
+                M = M.detach().cpu().numpy()
+            vis_pred_dets = {}
+            for label, bboxes in pred_dets.items():
+                if len(bboxes) == 0:
+                    continue
+                bboxes = np.array(bboxes, dtype=np.float32)
+                boxes_xyxy = warp_boxes(bboxes[:, :4], M, img_w, img_h)
+                vis_pred_dets[label] = np.concatenate(
+                    [boxes_xyxy, bboxes[:, 4:5]], axis=1
+                ).tolist()
+            vis_img = overlay_bbox_cv(vis_img, vis_pred_dets, self.cfg.class_names, score_thresh)
 
             # Draw GT boxes in green
             gt_img = vis_img.copy()

@@ -315,7 +315,7 @@ Outputs:
   cls_dis_stride_16 : [1, 34, 30, 40]
   cls_dis_stride_32 : [1, 34, 15, 20]
   cls_dis_stride_64 : [1, 34,  8, 10]
-Size:   ~5.x MB
+Size:   ~9.3 MB
 ```
 
 ### 7.4 输出格式
