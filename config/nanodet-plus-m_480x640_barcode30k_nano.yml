@@ -1,0 +1,140 @@
+# NanoDet-Plus Barcode-30k Nano
+# 激进轻量化：MobileNetV2 0.5x + FPN/Head 通道 32 + head 1 conv + 3x3 kernel + 去掉 stride 64
+# 预计 ONNX 大小 ~2-3 MB，NPU 上最快，但可能对小目标/密集 QR 有影响
+# Input tensor shape: 1 x 1 x 480 x 640 (NCHW)
+
+save_dir: workspace/nanodet-plus-m_barcode30k_nano
+model:
+  weight_averager:
+    name: ExpMovingAverager
+    decay: 0.9998
+  arch:
+    name: NanoDetPlus
+    detach_epoch: 10
+    backbone:
+      name: MobileNetV2
+      width_mult: 0.5
+      out_stages: [2, 4, 6]
+      last_channel: 160        # 320 * 0.5
+      in_channels: 1
+      activation: LeakyReLU
+      pretrain: False
+    fpn:
+      name: GhostPAN
+      in_channels: [16, 48, 160]   # MobileNetV2 0.5x 输出
+      out_channels: 32
+      kernel_size: 3
+      num_extra_level: 0           # 去掉 extra level，只输出 3 层
+      use_depthwise: True
+      activation: LeakyReLU
+      upsample_cfg:
+        scale_factor: 2
+        mode: nearest
+    head:
+      name: NanoDetPlusHead
+      num_classes: 2
+      input_channel: 32
+      feat_channels: 32
+      stacked_convs: 1
+      kernel_size: 3
+      strides: [8, 16, 32]         # 去掉 stride 64
+      activation: LeakyReLU
+      reg_max: 7
+      norm_cfg:
+        type: BN
+      loss:
+        loss_qfl:
+          name: QualityFocalLoss
+          use_sigmoid: True
+          beta: 2.0
+          loss_weight: 1.0
+        loss_dfl:
+          name: DistributionFocalLoss
+          loss_weight: 0.25
+        loss_bbox:
+          name: GIoULoss
+          loss_weight: 2.0
+    aux_head:
+      name: SimpleConvHead
+      num_classes: 2
+      input_channel: 64          # 32 * 2
+      feat_channels: 64
+      stacked_convs: 2           # aux 也减少
+      strides: [8, 16, 32]
+      activation: LeakyReLU
+      reg_max: 7
+
+data:
+  train:
+    name: CocoDataset
+    img_path: dataset/barcode30k_final/train/images
+    ann_path: dataset/barcode30k_final/train/train.json
+    input_size: [640, 480]
+    keep_ratio: True
+    grayscale: True
+    pipeline:
+      perspective: 0.0
+      scale: [0.6, 1.4]
+      stretch: [[0.8, 1.2], [0.8, 1.2]]
+      rotation: 5
+      shear: 2
+      translate: 0.1
+      flip: 0.5
+      brightness: 0.1
+      contrast: [0.8, 1.2]
+      normalize: [[114.4859], [66.9615]]
+  val:
+    name: CocoDataset
+    img_path: dataset/barcode30k_final/val/images
+    ann_path: dataset/barcode30k_final/val/val.json
+    input_size: [640, 480]
+    keep_ratio: True
+    grayscale: True
+    pipeline:
+      normalize: [[114.4859], [66.9615]]
+
+  # test:
+  #   name: CocoDataset
+  #   img_path: dataset/barcode30k_final/test/images
+  #   ann_path: dataset/barcode30k_final/test/test.json
+  #   input_size: [640, 480]
+  #   keep_ratio: True
+  #   grayscale: True
+  #   pipeline:
+  #     normalize: [[114.4859], [66.9615]]
+
+device:
+  gpu_ids: [0]
+  workers_per_gpu: 16
+  batchsize_per_gpu: 96        # 模型很小，batch 可以更大
+  precision: 32
+
+schedule:
+  optimizer:
+    name: AdamW
+    lr: 0.001
+    weight_decay: 0.05
+  warmup:
+    name: linear
+    steps: 5000
+    ratio: 0.0001
+  total_epochs: 1000
+  lr_schedule:
+    name: CosineAnnealingLR
+    T_max: 1000
+    eta_min: 0.00005
+  val_intervals: 1
+
+grad_clip: 35
+evaluator:
+  name: CocoDetectionEvaluator
+  save_key: mAP
+
+log:
+  interval: 10
+
+vis:
+  num_images: 5
+  score_thresh: 0.5
+
+class_names: ['barcode', 'qr_code']

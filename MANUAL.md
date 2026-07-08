@@ -151,6 +151,32 @@ device:
   precision: 32               # 保持 FP32
 ```
 
+### 3.1 轻量化配置（可选）
+
+仓库还提供了三个不同优化强度的配置，用于在 NPU 上进一步加速：
+
+| 配置 | 文件 | 参数量 | 预估 ONNX | 优化手段 | 适用场景 |
+|---|---|---|---|---|---|
+| **Baseline** | `config/nanodet-plus-m_480x640_barcode30k.yml` | ~5.2 M | ~9.3 MB | MobileNetV2 1.0x，FPN/Head 96 ch | 精度优先 |
+| **Lite** | `config/nanodet-plus-m_480x640_barcode30k_lite.yml` | ~3.4 M | ~7.9 MB | FPN/Head 降到 64 ch | 速度略快，精度损失最小 |
+| **Tiny** | `config/nanodet-plus-m_480x640_barcode30k_tiny.yml` | ~1.9 M | ~4.5 MB | MobileNetV2 0.75x，FPN/Head 48 ch，Head 1 conv，3×3 kernel | 速度与精度平衡 |
+| **Nano** | `config/nanodet-plus-m_480x640_barcode30k_nano.yml` | ~0.7 M | ~2.0 MB | MobileNetV2 0.5x，FPN/Head 32 ch，去掉 stride 64 | 极速，可能对小目标有影响 |
+| **Pico** | `config/nanodet-plus-m_480x640_barcode30k_pico.yml` | ~0.4 M | ~1.3 MB | MobileNetV2 0.4x，FPN/Head 24 ch；调大 batch/aug/lr | 超轻量，尝试维持精度 |
+| **Femto** | `config/nanodet-plus-m_480x640_barcode30k_femto.yml` | ~0.2 M | ~0.6 MB | MobileNetV2 0.25x，FPN/Head 16 ch；更强 aug + 大 batch | 极致轻量，精度会有下降 |
+
+切换训练配置只需改命令：
+
+```bash
+# Lite
+python tools/train.py config/nanodet-plus-m_480x640_barcode30k_lite.yml
+
+# Tiny
+python tools/train.py config/nanodet-plus-m_480x640_barcode30k_tiny.yml
+
+# Nano
+python tools/train.py config/nanodet-plus-m_480x640_barcode30k_nano.yml
+```
+
 ---
 
 ## 4. 训练

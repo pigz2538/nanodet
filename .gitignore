@@ -117,8 +117,9 @@ work_dirs/
 *.pth
 *.py~
 *.sh~
+*.ckpts
 
 /dataset
 /.history
 /workspace
-/config
+*.onnx
